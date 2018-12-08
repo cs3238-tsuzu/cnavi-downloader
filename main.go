@@ -285,6 +285,7 @@ func main() {
 			return
 		}
 
+		rw.Header().Set("Access-Control-Allow-Origin", "*")
 		rw.Header().Set("Content-Type", "video/MP2T")
 		rw.Header().Set("Content-Disposition", "inline")
 		rw.WriteHeader(http.StatusOK)
