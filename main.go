@@ -285,6 +285,10 @@ func main() {
 			return
 		}
 
+		rw.Header().Set("Content-Type", "video/MP2T")
+		rw.Header().Set("Content-Disposition", "inline")
+		rw.WriteHeader(http.StatusOK)
+
 		defer reader.Close()
 		io.Copy(rw, reader)
 	}
