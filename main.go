@@ -263,6 +263,8 @@ func main() {
 		if authToken2 == "" {
 			rw.WriteHeader(http.StatusBadRequest)
 			rw.Write([]byte("auth_token2クエリが必要です"))
+
+			return
 		}
 
 		master, err := getMetaPlaylist(MetaPlaylistURLBase + authToken2)
