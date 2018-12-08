@@ -260,6 +260,11 @@ func main() {
 
 		authToken2 := req.FormValue("auth_token2")
 
+		if authToken2 == "" {
+			rw.WriteHeader(http.StatusBadRequest)
+			rw.Write([]byte("auth_token2クエリが必要です"))
+		}
+
 		master, err := getMetaPlaylist(MetaPlaylistURLBase + authToken2)
 
 		if err != nil {
