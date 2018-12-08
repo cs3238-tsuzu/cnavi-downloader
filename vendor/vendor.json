@@ -7,6 +7,12 @@
 			"path": "github.com/grafov/m3u8",
 			"revision": "6ab8f28ed427e7ab787340596709e27ecc4b32db",
 			"revisionTime": "2017-12-11T21:24:57Z"
+		},
+		{
+			"checksumSHA1": "VhUZFUuhLFSBFUfskMC4am5RIdc=",
+			"path": "golang.org/x/sync/singleflight",
+			"revision": "42b317875d0fa942474b76e1b46a6060d720ae6e",
+			"revisionTime": "2018-11-08T00:20:06Z"
 		}
 	],
 	"rootPath": "github.com/cs3238-tsuzu/cnavi-downloader"

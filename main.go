@@ -12,11 +12,16 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/grafov/m3u8"
 )
 
 const MetaPlaylistURLBase = "https://hls-vod-auth.stream.co.jp/hls-vod-auth/waseda-wse/meta.m3u8?tk="
+
+var client = &http.Client{}
 
 func get(url string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
@@ -25,9 +30,12 @@ func get(url string) (*http.Response, error) {
 		return nil, err
 	}
 
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Origin", "https://cnt.waseda.jp")
+	req.Header.Set("Referer", "https://cnt.waseda.jp/fcontents/uniplayer/src/uni-player.html?playing_info=https://cnt.waseda.jp/fcontents/26/2014/2014260011100301/alc_c12_02_2014/content-playing-info-video1.xml&content_metadata=https://cnt.waseda.jp/fcontents/26/2014/2014260011100301/alc_c12_02_2014/content.xml&fms_auth=True")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36")
 
-	return http.DefaultClient.Do(req)
+	return client.Do(req)
 }
 
 func getMetaPlaylist(url string) (string, error) {
@@ -69,19 +77,46 @@ type DecryptingDecoder struct {
 	blockMode cipher.BlockMode
 }
 
-func newDecryptingDecoderForM3U8(from io.Reader, keyURL string, iv []byte) (*DecryptingDecoder, error) {
-	resp, err := get(keyURL)
+type decryptingDecoderGenerator struct {
+	keyURLSingleflightGroup singleflight.Group
+	keyURLs                 sync.Map
+}
+
+func newDecryptingDecoderGenerator() *decryptingDecoderGenerator {
+	return &decryptingDecoderGenerator{
+		keyURLs: sync.Map{},
+	}
+}
+
+func (d *decryptingDecoderGenerator) newDecryptingDecoderForM3U8(from io.Reader, keyURL string, iv []byte) (*DecryptingDecoder, error) {
+	keyI, err, _ := d.keyURLSingleflightGroup.Do(keyURL, func() (interface{}, error) {
+		if b, ok := d.keyURLs.Load(keyURL); ok {
+			return b, nil
+		}
+
+		resp, err := get(keyURL)
+
+		if err != nil {
+			return nil, err
+		}
+
+		key, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if err != nil {
+			return nil, err
+		}
+
+		d.keyURLs.Store(keyURL, key)
+
+		return key, nil
+	})
 
 	if err != nil {
 		return nil, err
 	}
 
-	key, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-
-	if err != nil {
-		return nil, err
-	}
+	key := keyI.([]byte)
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -98,18 +133,16 @@ func newDecryptingDecoderForM3U8(from io.Reader, keyURL string, iv []byte) (*Dec
 }
 
 func (dd *DecryptingDecoder) Read(b []byte) (int, error) {
-	buf := make([]byte, len(b)/dd.blockMode.BlockSize()*dd.blockMode.BlockSize())
-	n, err := io.ReadFull(dd.base, buf)
-
-	if err != nil {
-		return 0, err
-	}
-
-	buf = buf[:n]
+	hexOctetLen := len(b) / dd.blockMode.BlockSize() * dd.blockMode.BlockSize()
+	buf, err := ioutil.ReadAll(io.LimitReader(dd.base, int64(hexOctetLen)))
 
 	dd.blockMode.CryptBlocks(b, buf)
 
-	return n, nil
+	if len(buf) == 0 {
+		err = io.EOF
+	}
+
+	return len(buf), err
 }
 
 func downloadMovie(url string) (r io.ReadCloser, err error) {
@@ -174,6 +207,8 @@ func downloadMovie(url string) (r io.ReadCloser, err error) {
 
 	go func() {
 		defer pw.Close()
+		generator := newDecryptingDecoderGenerator()
+
 		for i := range segments {
 			segments[i].Response, err = get(segments[i].URL)
 
@@ -184,7 +219,7 @@ func downloadMovie(url string) (r io.ReadCloser, err error) {
 				return
 			}
 
-			decoder, err := newDecryptingDecoderForM3U8(segments[i].Response.Body, segments[i].KeyURI, segments[i].IV)
+			decoder, err := generator.newDecryptingDecoderForM3U8(segments[i].Response.Body, segments[i].KeyURI, segments[i].IV)
 
 			if err != nil {
 				segments[i].Response.Body.Close()
@@ -193,7 +228,12 @@ func downloadMovie(url string) (r io.ReadCloser, err error) {
 				return
 			}
 
-			io.Copy(pw, decoder)
+			if w, err := io.Copy(pw, decoder); err != nil {
+				log.Println(err)
+				log.Println("length: ", w)
+				log.Println("expected length: ", segments[i].Response.Header.Get("Content-Length"))
+				log.Println(segments[i].Response.Header)
+			}
 			segments[i].Response.Body.Close()
 		}
 	}()
